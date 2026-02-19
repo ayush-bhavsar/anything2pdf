@@ -37,3 +37,6 @@ desktop.ini
 # Environment variables
 .env
 .env.*
+
+# Claude Code temporary directories
+tmpclaude*/
