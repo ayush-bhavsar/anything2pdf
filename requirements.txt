@@ -1,0 +1,8 @@
+# Required
+Pillow>=10.0.0
+reportlab>=4.0.0
+rich>=13.0.0
+InquirerPy>=0.3.4
+
+# Optional — needed only for --password
+pypdf>=3.0.0
