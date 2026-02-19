@@ -963,17 +963,446 @@ def _parse_selection(raw: str, total: int) -> List[int]:
     return [i for i in indices if 0 <= i < total]
 
 
+# ─────────────────────────────────────────────
+# Folder scanner & feature menu (interactive)
+# ─────────────────────────────────────────────
+CSV_EXTENSIONS = {'.csv'}
+EXCEL_EXTENSIONS = {'.xlsx', '.xls'}
+
+
+def scan_script_directory() -> List[Dict[str, Any]]:
+    """
+    Scan all immediate subdirectories of the script's directory and
+    return a list of dicts with file-type statistics.
+    """
+    script_dir = Path(__file__).parent.resolve()
+    folders: List[Dict[str, Any]] = []
+
+    for entry in sorted(script_dir.iterdir(), key=lambda e: e.name.lower()):
+        if not entry.is_dir() or entry.name.startswith('.') or entry.name == '__pycache__':
+            continue
+        stats: Dict[str, Any] = {
+            'name': entry.name,
+            'path': entry,
+            'images': 0, 'csv': 0, 'excel': 0, 'other': 0,
+        }
+        try:
+            for f in entry.iterdir():
+                if not f.is_file():
+                    continue
+                ext = f.suffix.lower()
+                if ext in SUPPORTED_FORMATS:
+                    stats['images'] += 1
+                elif ext in CSV_EXTENSIONS:
+                    stats['csv'] += 1
+                elif ext in EXCEL_EXTENSIONS:
+                    stats['excel'] += 1
+                else:
+                    stats['other'] += 1
+        except PermissionError:
+            print_warning(f"Cannot read folder: {entry.name}")
+            continue
+        folders.append(stats)
+
+    return folders
+
+
+def display_folder_table(folders: List[Dict[str, Any]]) -> None:
+    """Display a table of folders and their detected file types."""
+    if HAS_RICH:
+        tbl = Table(
+            title="[bold]Folders in Script Directory[/bold]",
+            show_header=True,
+            header_style="bold cyan",
+            border_style="dim",
+        )
+        tbl.add_column("#", style="dim", width=4, justify="right")
+        tbl.add_column("Folder", style="white", min_width=20, no_wrap=True)
+        tbl.add_column("Images", style="green", width=8, justify="right")
+        tbl.add_column("CSV", style="yellow", width=6, justify="right")
+        tbl.add_column("Excel", style="blue", width=7, justify="right")
+        tbl.add_column("Other", style="dim", width=7, justify="right")
+
+        for i, folder in enumerate(folders, 1):
+            if folder['images'] > 0:
+                name = f"[bold green]{folder['name']}[/bold green]"
+            else:
+                name = f"[dim]{folder['name']}[/dim]"
+            img_str = str(folder['images']) if folder['images'] > 0 else "-"
+            csv_str = str(folder['csv']) if folder['csv'] > 0 else "-"
+            xls_str = str(folder['excel']) if folder['excel'] > 0 else "-"
+            oth_str = str(folder['other']) if folder['other'] > 0 else "-"
+            tbl.add_row(str(i), name, img_str, csv_str, xls_str, oth_str)
+
+        console.print()
+        console.print(tbl)
+        console.print()
+    else:
+        print(f"\nFolders found ({len(folders)}):")
+        print(f"  {'#':>3}  {'Folder':<30} {'Images':>7} {'CSV':>5} {'Excel':>6} {'Other':>6}")
+        print("  " + "-" * 60)
+        for i, folder in enumerate(folders, 1):
+            marker = " *" if folder['images'] > 0 else ""
+            print(f"  {i:3}  {folder['name']:<30} {folder['images']:>7} "
+                  f"{folder['csv']:>5} {folder['excel']:>6} {folder['other']:>6}{marker}")
+        print()
+
+
+def select_folder(folders: List[Dict[str, Any]]) -> Path:
+    """
+    Let the user select a folder with images.
+    Returns the selected folder Path.
+    """
+    script_dir = Path(__file__).parent.resolve()
+    folders_with_images = [f for f in folders if f['images'] > 0]
+
+    if not folders_with_images:
+        print_warning("No subfolders with images found. Using script directory.")
+        return script_dir
+
+    if HAS_INQUIRER:
+        try:
+            choices = []
+            for f in folders_with_images:
+                label = f"{f['name']:<30}  ({f['images']} image{'s' if f['images'] != 1 else ''})"
+                choices.append(Choice(value=f['path'], name=label))
+            choices.append(Choice(value=script_dir, name="[Script root directory]"))
+
+            selected = inquirer.select(
+                message="Select a folder to scan for images",
+                choices=choices,
+                cycle=True,
+            ).execute()
+            return selected
+        except Exception:
+            pass  # Fall through to plain text picker
+
+    # Plain text fallback
+    print("Folders with images:")
+    for i, f in enumerate(folders_with_images, 1):
+        print(f"  {i}. {f['name']} ({f['images']} images)")
+    print(f"  0. [Script root directory]")
+
+    raw = input("\nSelect folder number: ").strip()
+    if raw == '0' or raw == '':
+        return script_dir
+    try:
+        idx = int(raw) - 1
+        if 0 <= idx < len(folders_with_images):
+            return folders_with_images[idx]['path']
+    except ValueError:
+        pass
+    print_warning("Invalid selection, using script directory.")
+    return script_dir
+
+
+def feature_menu(args: argparse.Namespace) -> bool:
+    """
+    Display an interactive feature configuration menu with alphabet keys.
+    Returns True to proceed with conversion, False to quit.
+    Modifies args in-place.
+    """
+
+    def _get_features():
+        """Build feature list with current values."""
+        return [
+            ('a', 'Page Size',      args.page_size),
+            ('b', 'Orientation',    args.orientation),
+            ('c', 'Fit Mode',       args.fit_mode),
+            ('d', 'Quality',        str(args.quality)),
+            ('e', 'DPI',            str(args.dpi)),
+            ('f', 'Margin',         f"{args.margin:.1f} pt"),
+            ('g', 'Grid Layout',    f"{args.grid[0]}x{args.grid[1]}" if args.grid else "None"),
+            ('h', 'Password',       "Set" if args.password else "Not set"),
+            ('i', 'Title',          args.title or "Not set"),
+            ('j', 'Author',         args.author or "Not set"),
+            ('k', 'Labels',         "On" if args.label else "Off"),
+            ('l', 'Page Numbers',   "On" if args.page_numbers else "Off"),
+            ('m', 'Borders',        "On" if args.border else "Off"),
+            ('n', 'Sort By',        args.sort + (" (reversed)" if args.reverse else "")),
+            ('o', 'Rotation Fix',   "Off" if args.no_rotation_fix else "On"),
+            ('p', 'White BG',       "On" if args.white_bg else "Off"),
+        ]
+
+    def _render_menu(features):
+        """Render the menu using Rich or plain text."""
+        if HAS_RICH:
+            tbl = Table(
+                title="[bold]Feature Configuration[/bold]",
+                show_header=True,
+                header_style="bold cyan",
+                border_style="dim",
+                padding=(0, 1),
+            )
+            tbl.add_column("Key", style="bold yellow", width=5, justify="center")
+            tbl.add_column("Feature", style="white", min_width=16)
+            tbl.add_column("Current Value", style="green", min_width=20)
+
+            for key, label, value in features:
+                tbl.add_row(f"\\[{key}]", label, value)
+
+            console.print()
+            console.print(tbl)
+            console.print()
+            console.print(
+                "  [bold green]\\[s][/bold green] START conversion    "
+                "[bold red]\\[q][/bold red] QUIT"
+            )
+            console.print()
+        else:
+            print("\n--- Feature Configuration ---")
+            for key, label, value in features:
+                print(f"  [{key}] {label:<18} : {value}")
+            print(f"\n  [s] START conversion    [q] QUIT\n")
+
+    # ── Handlers ──────────────────────────────────
+
+    def _handle_page_size():
+        options = ['fit', 'a4', 'a3', 'a5', 'letter', 'legal', 'tabloid', 'b5']
+        if HAS_INQUIRER:
+            try:
+                result = inquirer.select(
+                    message="Select page size",
+                    choices=options + [Choice(value='_custom', name='Custom (WxH)')],
+                ).execute()
+                if result == '_custom':
+                    custom = inquirer.text(
+                        message="Enter custom size (e.g., 210x297mm):"
+                    ).execute()
+                    try:
+                        parse_page_size(custom)
+                        args.page_size = custom
+                    except ValueError as e:
+                        print_error(str(e))
+                else:
+                    args.page_size = result
+                return
+            except Exception:
+                pass  # Fall through to plain text
+        print(f"  Options: {', '.join(options)}, or WxH[mm|cm|in|pt]")
+        raw = input("  Page size: ").strip()
+        if raw:
+            try:
+                if raw.lower() != 'fit':
+                    parse_page_size(raw)
+                args.page_size = raw
+            except ValueError as e:
+                print_error(str(e))
+
+    def _handle_orientation():
+        options = ['auto', 'portrait', 'landscape']
+        idx = options.index(args.orientation) if args.orientation in options else 0
+        args.orientation = options[(idx + 1) % len(options)]
+        print_info(f"Orientation set to: {args.orientation}")
+
+    def _handle_fit_mode():
+        options = ['fit', 'fill', 'stretch', 'center']
+        idx = options.index(args.fit_mode) if args.fit_mode in options else 0
+        args.fit_mode = options[(idx + 1) % len(options)]
+        print_info(f"Fit mode set to: {args.fit_mode}")
+
+    def _handle_quality():
+        if HAS_INQUIRER:
+            try:
+                val = inquirer.number(
+                    message="JPEG quality (1-100):",
+                    default=args.quality,
+                    min_allowed=1,
+                    max_allowed=100,
+                ).execute()
+                args.quality = int(val)
+                return
+            except Exception:
+                pass
+        raw = input(f"  Quality (1-100) [{args.quality}]: ").strip()
+        if raw.isdigit() and 1 <= int(raw) <= 100:
+            args.quality = int(raw)
+
+    def _handle_dpi():
+        if HAS_INQUIRER:
+            try:
+                val = inquirer.number(
+                    message="DPI:",
+                    default=args.dpi,
+                    min_allowed=1,
+                ).execute()
+                args.dpi = int(val)
+                return
+            except Exception:
+                pass
+        raw = input(f"  DPI [{args.dpi}]: ").strip()
+        if raw.isdigit() and int(raw) > 0:
+            args.dpi = int(raw)
+
+    def _handle_margin():
+        if HAS_INQUIRER:
+            try:
+                raw = inquirer.text(
+                    message="Margin (e.g., 10mm, 0.5in, 20pt):",
+                    default="0",
+                ).execute()
+            except Exception:
+                raw = input("  Margin (e.g., 10mm, 0.5in, 20pt): ").strip()
+        else:
+            raw = input("  Margin (e.g., 10mm, 0.5in, 20pt): ").strip()
+        if raw:
+            try:
+                args.margin = parse_margin(raw)
+                print_info(f"Margin set to: {args.margin:.1f} pt")
+            except argparse.ArgumentTypeError as e:
+                print_error(str(e))
+
+    def _handle_grid():
+        if HAS_INQUIRER:
+            try:
+                raw = inquirer.text(
+                    message="Grid layout (CxR, e.g., 2x2) or 'none' to disable:",
+                    default="none",
+                ).execute()
+            except Exception:
+                raw = input("  Grid layout (CxR or 'none'): ").strip()
+        else:
+            raw = input("  Grid layout (CxR or 'none'): ").strip()
+        if raw.lower() in ('none', 'n', ''):
+            args.grid = None
+            print_info("Grid disabled.")
+        else:
+            try:
+                args.grid = parse_grid(raw)
+                print_info(f"Grid set to: {args.grid[0]}x{args.grid[1]}")
+            except argparse.ArgumentTypeError as e:
+                print_error(str(e))
+
+    def _handle_password():
+        if HAS_INQUIRER:
+            try:
+                pw = inquirer.secret(message="Password (blank to remove):").execute()
+            except Exception:
+                import getpass
+                pw = getpass.getpass("  Password (blank to remove): ")
+        else:
+            import getpass
+            pw = getpass.getpass("  Password (blank to remove): ")
+        args.password = pw if pw.strip() else None
+        print_info("Password " + ("set." if args.password else "removed."))
+
+    def _handle_title():
+        if HAS_INQUIRER:
+            try:
+                val = inquirer.text(
+                    message="Title:", default=args.title or ""
+                ).execute()
+            except Exception:
+                val = input(f"  Title [{args.title or ''}]: ").strip()
+        else:
+            val = input(f"  Title [{args.title or ''}]: ").strip()
+        args.title = val if val.strip() else None
+
+    def _handle_author():
+        if HAS_INQUIRER:
+            try:
+                val = inquirer.text(
+                    message="Author:", default=args.author or ""
+                ).execute()
+            except Exception:
+                val = input(f"  Author [{args.author or ''}]: ").strip()
+        else:
+            val = input(f"  Author [{args.author or ''}]: ").strip()
+        args.author = val if val.strip() else None
+
+    def _toggle_label():
+        args.label = not args.label
+        print_info(f"Labels: {'On' if args.label else 'Off'}")
+
+    def _toggle_page_numbers():
+        args.page_numbers = not args.page_numbers
+        print_info(f"Page numbers: {'On' if args.page_numbers else 'Off'}")
+
+    def _toggle_border():
+        args.border = not args.border
+        print_info(f"Borders: {'On' if args.border else 'Off'}")
+
+    def _handle_sort():
+        options = ['name', 'date', 'size', 'path', 'none']
+        idx = options.index(args.sort) if args.sort in options else 0
+        args.sort = options[(idx + 1) % len(options)]
+        print_info(f"Sort by: {args.sort}")
+
+    def _toggle_rotation_fix():
+        args.no_rotation_fix = not args.no_rotation_fix
+        print_info(f"Rotation fix: {'Off' if args.no_rotation_fix else 'On'}")
+
+    def _toggle_white_bg():
+        args.white_bg = not args.white_bg
+        print_info(f"White background: {'On' if args.white_bg else 'Off'}")
+
+    handlers = {
+        'a': _handle_page_size,
+        'b': _handle_orientation,
+        'c': _handle_fit_mode,
+        'd': _handle_quality,
+        'e': _handle_dpi,
+        'f': _handle_margin,
+        'g': _handle_grid,
+        'h': _handle_password,
+        'i': _handle_title,
+        'j': _handle_author,
+        'k': _toggle_label,
+        'l': _toggle_page_numbers,
+        'm': _toggle_border,
+        'n': _handle_sort,
+        'o': _toggle_rotation_fix,
+        'p': _toggle_white_bg,
+    }
+
+    # ── Main loop ─────────────────────────────────
+    while True:
+        features = _get_features()
+        _render_menu(features)
+
+        choice = input("  Enter option: ").strip().lower()
+
+        if choice == 's':
+            return True
+        elif choice == 'q':
+            return False
+        elif choice in handlers:
+            handlers[choice]()
+        else:
+            print_warning(f"Unknown option '{choice}'. Use a-p, s, or q.")
+
+
 def interactive_mode(args: argparse.Namespace) -> List[Path]:
     """
-    Scan the current directory, show an interactive picker, ask for
-    the output filename, and return the selected Path list.
-    Modifies args.output in-place.
+    Enhanced interactive mode:
+    1. Scan script directory for folders and show file-type summary
+    2. Let user pick a folder with images
+    3. Show image picker
+    4. Show alphabet-keyed feature configuration menu
+    5. Ask for output filename
+    6. Return selected Path list (modifies args in-place)
     """
+
+    # ── Step 1: Folder scanning ───────────────────────────────────────
     if not args.quiet:
-        print_info("Scanning current directory for images...")
+        print_info("Scanning script directory for folders...")
+
+    folders = scan_script_directory()
+
+    if folders:
+        display_folder_table(folders)
+        selected_folder = select_folder(folders)
+    else:
+        selected_folder = Path(__file__).parent.resolve()
+        if not args.quiet:
+            print_info("No subfolders found. Using script directory.")
+
+    # ── Step 2: Collect images from selected folder ───────────────────
+    if not args.quiet:
+        print_info(f"Scanning '{selected_folder.name}' for images...")
 
     all_files = collect_image_files(
-        ['.'],
+        [str(selected_folder)],
         recursive=args.recursive,
         sort_by=args.sort,
         reverse=args.reverse,
@@ -981,62 +1410,58 @@ def interactive_mode(args: argparse.Namespace) -> List[Path]:
 
     if not all_files:
         print_error(
-            "No supported image files found in the current directory.\n"
+            f"No supported image files found in '{selected_folder.name}'.\n"
             "         Tip: use -r to search recursively, or pass paths as arguments."
         )
         sys.exit(1)
 
-    # ── InquirerPy branch ──────────────────────────────────────────────
+    # ── Step 3: Image picker ──────────────────────────────────────────
+    use_inquirer_picker = False
     if HAS_INQUIRER:
-        choices = []
-        for f in all_files:
-            try:
-                info = get_image_info(f)
-                if 'error' not in info:
-                    label = (
-                        f"{f.name:<36}  "
-                        f"{info['width']:>5}x{info['height']:<5}  "
-                        f"{format_file_size(info['file_size']):>9}"
-                    )
-                else:
-                    label = f"{f.name}  [error reading]"
-            except Exception:
-                label = f.name
-            choices.append(Choice(value=f, name=label))
+        try:
+            choices = []
+            for f in all_files:
+                try:
+                    info = get_image_info(f)
+                    if 'error' not in info:
+                        label = (
+                            f"{f.name:<36}  "
+                            f"{info['width']:>5}x{info['height']:<5}  "
+                            f"{format_file_size(info['file_size']):>9}"
+                        )
+                    else:
+                        label = f"{f.name}  [error reading]"
+                except Exception:
+                    label = f.name
+                choices.append(Choice(value=f, name=label))
 
-        if HAS_RICH:
-            console.print()
-            console.print(
-                f"  [bold cyan]{len(all_files)}[/bold cyan] image(s) found in "
-                f"[dim]{Path('.').resolve()}[/dim]\n"
-            )
+            if HAS_RICH:
+                console.print()
+                console.print(
+                    f"  [bold cyan]{len(all_files)}[/bold cyan] image(s) found in "
+                    f"[dim]{selected_folder}[/dim]\n"
+                )
 
-        selected: List[Path] = inquirer.checkbox(
-            message="Select images to include in the PDF",
-            choices=choices,
-            cycle=True,
-            instruction="(Space=toggle  Up/Down=navigate  /=search  Enter=confirm)",
-            transformer=lambda result: f"{len(result)} image(s) selected",
-            validate=lambda result: len(result) > 0,
-            invalid_message="Select at least one image.",
-        ).execute()
+            selected: List[Path] = inquirer.checkbox(
+                message="Select images to include in the PDF",
+                choices=choices,
+                cycle=True,
+                instruction="(Space=toggle  Up/Down=navigate  /=search  Enter=confirm)",
+                transformer=lambda result: f"{len(result)} image(s) selected",
+                validate=lambda result: len(result) > 0,
+                invalid_message="Select at least one image.",
+            ).execute()
 
-        if not selected:
-            print_warning("No images selected. Exiting.")
-            sys.exit(0)
+            if not selected:
+                print_warning("No images selected. Exiting.")
+                sys.exit(0)
 
-        # Ask for output filename
-        default_out = "output.pdf"
-        output: str = inquirer.text(
-            message="Output PDF filename:",
-            default=default_out,
-            validate=lambda v: len(v.strip()) > 0,
-            invalid_message="Please enter a filename.",
-        ).execute()
-        args.output = output.strip() or default_out
+            use_inquirer_picker = True
+        except Exception:
+            pass  # Fall through to plain text picker
 
-    # ── Fallback: plain text picker ───────────────────────────────────
-    else:
+    if not use_inquirer_picker:
+        # Fallback: plain text picker
         if HAS_RICH:
             tbl = Table(show_header=True, header_style="bold cyan", border_style="dim")
             tbl.add_column("#", style="dim", width=4, justify="right")
@@ -1078,8 +1503,43 @@ def interactive_mode(args: argparse.Namespace) -> List[Path]:
         else:
             print(f"Selected {len(selected)} image(s).")
 
-        # Ask for output filename
-        default_out = "output.pdf"
+    # ── Step 4: Feature configuration menu ────────────────────────────
+    original_sort = args.sort
+    original_reverse = args.reverse
+
+    proceed = feature_menu(args)
+    if not proceed:
+        print_info("Cancelled.")
+        sys.exit(0)
+
+    # Re-sort selected images if sort settings changed
+    if args.sort != original_sort or args.reverse != original_reverse:
+        if args.sort == 'name':
+            selected.sort(key=lambda f: natural_sort_key(f.name), reverse=args.reverse)
+        elif args.sort == 'date':
+            selected.sort(key=lambda f: f.stat().st_mtime, reverse=args.reverse)
+        elif args.sort == 'size':
+            selected.sort(key=lambda f: f.stat().st_size, reverse=args.reverse)
+        elif args.sort == 'path':
+            selected.sort(key=lambda f: natural_sort_key(str(f)), reverse=args.reverse)
+        elif args.sort == 'none' and args.reverse:
+            selected.reverse()
+
+    # ── Step 5: Output filename ───────────────────────────────────────
+    default_out = "output.pdf"
+    if HAS_INQUIRER:
+        try:
+            output_name: str = inquirer.text(
+                message="Output PDF filename:",
+                default=default_out,
+                validate=lambda v: len(v.strip()) > 0,
+                invalid_message="Please enter a filename.",
+            ).execute()
+            args.output = output_name.strip() or default_out
+        except Exception:
+            raw_out = input(f"Output PDF filename [{default_out}]: ").strip()
+            args.output = raw_out or default_out
+    else:
         raw_out = input(f"Output PDF filename [{default_out}]: ").strip()
         args.output = raw_out or default_out
 
