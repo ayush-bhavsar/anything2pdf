@@ -831,7 +831,7 @@ EXAMPLES
         help='Image files, directories, or glob patterns. Omit to launch the interactive picker.',
     )
     io.add_argument(
-        '-o', '--output', default='output.pdf', metavar='FILE',
+        '-o', '--output', default='output/output.pdf', metavar='FILE',
         help='Output PDF path (default: output.pdf)',
     )
     io.add_argument(
@@ -1526,7 +1526,7 @@ def interactive_mode(args: argparse.Namespace) -> List[Path]:
             selected.reverse()
 
     # ── Step 5: Output filename ───────────────────────────────────────
-    default_out = "output.pdf"
+    default_out = "output/output.pdf"
     if HAS_INQUIRER:
         try:
             output_name: str = inquirer.text(
