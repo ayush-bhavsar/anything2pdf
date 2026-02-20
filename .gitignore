@@ -40,3 +40,6 @@ desktop.ini
 
 # Claude Code temporary directories
 tmpclaude*/
+
+# Not to show output pdfs folder
+output/
