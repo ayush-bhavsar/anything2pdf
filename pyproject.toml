@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anything2pdf"
+version = "1.0.0"
+description = "A feature-rich terminal tool to convert images to PDF"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8"
+authors = [
+    { name = "Ayush Bhavsar" },
+]
+keywords = ["image", "pdf", "converter", "cli", "img2pdf"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics :: Graphics Conversion",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "Pillow>=10.0.0",
+    "reportlab>=4.0.0",
+    "rich>=13.0.0",
+    "InquirerPy>=0.3.4",
+    "pypdf>=3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "build",
+    "twine",
+]
+
+[project.urls]
+Homepage = "https://github.com/ayush-bhavsar/anything2pdf"
+Repository = "https://github.com/ayush-bhavsar/anything2pdf"
+Issues = "https://github.com/ayush-bhavsar/anything2pdf/issues"
+
+[project.scripts]
+anything2pdf = "anything2pdf.converter:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
